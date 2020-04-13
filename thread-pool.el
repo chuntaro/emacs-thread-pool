@@ -41,6 +41,7 @@
 (cl-defstruct (tpool-work (:constructor nil))
   routine
   arg
+  job
   next)
 
 (cl-defstruct (tpool (:constructor nil))
@@ -60,12 +61,12 @@
   queue-not-full
   queue-empty)
 
-(defmacro tpool--with-slots (obj &rest body)
-  (declare (indent 1))
+(defmacro tpool--with-slots (struct obj &rest body)
+  (declare (indent 2))
   `(cl-symbol-macrolet
        ,(mapcar (lambda (slot)
-                  `(,slot (,(intern (concat "tpool-" (symbol-name slot))) ,obj)))
-                (mapcar #'car (cdr (cl-struct-slot-info 'tpool))))
+                  `(,slot (,(intern (concat (symbol-name struct) "-" (symbol-name slot))) ,obj)))
+                (mapcar #'car (cdr (cl-struct-slot-info struct))))
      ,@body))
 
 (defun tpool-init (num-worker-threads max-queue-size &optional do-not-block-when-full)
@@ -88,9 +89,9 @@
       (aset (tpool-threads tpool) i (make-thread (lambda () (tpool--thread tpool)))))
     tpool))
 
-(defun tpool-add-work (tpool routine arg)
+(defun tpool-add-work (tpool routine arg &optional job)
   (cl-block nil
-    (tpool--with-slots tpool
+    (tpool--with-slots tpool tpool
       (with-mutex queue-lock
         ;; no space and this caller doesn't want to wait
         (when (and (= cur-queue-size max-queue-size)
@@ -107,7 +108,7 @@
           (cl-return))
 
         ;; allocate work structure
-        (let ((work (record 'tpool-work routine arg nil)))
+        (let ((work (record 'tpool-work routine arg job nil)))
           (printf "adder: adding an item %s\n" routine) ;
 
           (if (not (zerop cur-queue-size))
@@ -125,7 +126,7 @@
 
 (defun tpool-destroy (tpool &optional finish)
   (cl-block nil
-    (tpool--with-slots tpool
+    (tpool--with-slots tpool tpool
       (with-mutex queue-lock
         ;; Is a shutdown already in progress?
         (when (or queue-closed shutdown)
@@ -153,7 +154,7 @@
 
 (defun tpool--thread (tpool)
   (cl-block nil
-    (tpool--with-slots tpool
+    (tpool--with-slots tpool tpool
       (while t
         (let (my-work)
           ;; Check queue for work
@@ -188,7 +189,37 @@
               (condition-notify queue-empty)))
 
           ;; Do this work item
-          (funcall (tpool-work-routine my-work) (tpool-work-arg my-work)))))))
+          (funcall (tpool-work-routine my-work) (tpool-work-arg my-work))
+
+          ;; For jobs, reduce the number of workers.
+          (when-let (job (tpool-work-job my-work))
+            (tpool-job--decrement-nworkers job)))))))
+
+(cl-defstruct (tpool-job (:constructor nil))
+  nworkers
+  nworkers-lock
+  nworkers-zerop)
+
+(defun tpool-make-job (nworkers)
+  (let ((nworkers-lock (make-mutex)))
+    (record 'tpool-job
+            nworkers
+            nworkers-lock
+            (make-condition-variable nworkers-lock))))
+
+(defun tpool-job--decrement-nworkers (job)
+  (tpool--with-slots tpool-job job
+    (with-mutex nworkers-lock
+      (when (< 0 nworkers)
+        (cl-decf nworkers)
+        (when (zerop nworkers)
+          (condition-notify nworkers-zerop t))))))
+
+(defun tpool-job-join (job)
+  (tpool--with-slots tpool-job job
+    (with-mutex nworkers-lock
+      (while (< 0 nworkers)
+        (condition-wait nworkers-zerop)))))
 
 (provide 'thread-pool)
 ;;; thread-pool.el ends here

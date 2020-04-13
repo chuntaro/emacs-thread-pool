@@ -80,6 +80,33 @@
     (tpool-destroy test-pool t)
     (switch-to-buffer "*Messages*")))
 
+(defun tpool-test-main1-with-job ()
+  (let* ((test-pool (tpool-init 10 20))
+         (job1 (tpool-make-job 3))
+         (job2 (tpool-make-job 3)))
+    (sleep-for 5)
+
+    (dotimes (i (tpool-job-nworkers job1))
+      (princ (format "tpool-add-work returned %s\n"
+                     (tpool-add-work test-pool #'tpool-test-r1 (aref tpool-test-s1 i) job1)))
+      (sleep-for 1))
+
+    (tpool-job-join job1)
+    (princ (format "main: job1 joined\n"))
+
+    (dotimes (i (tpool-job-nworkers job2))
+      (princ (format "tpool-add-work returned %s\n"
+                     (tpool-add-work test-pool #'tpool-test-r1 (aref tpool-test-s1 (+ i 10)) job2)))
+      (sleep-for 1))
+
+    (princ (format "main: all work queued\n"))
+
+    (tpool-job-join job2)
+    (princ (format "main: job2 joined\n"))
+
+    (tpool-destroy test-pool t)
+    (switch-to-buffer "*Messages*")))
+
 ;; Test Code Using the 国立国会図書館(National Diet Library, Japan) Search API.
 ;; (not part of `PThreads Programming')
 
