@@ -38,12 +38,12 @@
         `(princ (funcall #'format ,format ,@args)))
     (defmacro printf (_format &rest _args))))
 
-(cl-defstruct tpool-work
+(cl-defstruct (tpool-work (:constructor nil))
   routine
   arg
   next)
 
-(cl-defstruct tpool
+(cl-defstruct (tpool (:constructor nil))
   num-threads
   max-queue-size
   do-not-block-when-full
@@ -70,19 +70,20 @@
 
 (defun tpool-init (num-worker-threads max-queue-size &optional do-not-block-when-full)
   (let* ((queue-lock (make-mutex))
-         (tpool (make-tpool :num-threads num-worker-threads
-                            :max-queue-size max-queue-size
-                            :do-not-block-when-full do-not-block-when-full
-                            :threads (make-vector num-worker-threads nil)
-                            :cur-queue-size 0
-                            :queue-head nil
-                            :queue-tail nil
-                            :queue-closed nil
-                            :shutdown nil
-                            :queue-lock queue-lock
-                            :queue-not-empty (make-condition-variable queue-lock)
-                            :queue-not-full (make-condition-variable queue-lock)
-                            :queue-empty (make-condition-variable queue-lock))))
+         (tpool (record 'tpool
+                        num-worker-threads
+                        max-queue-size
+                        do-not-block-when-full
+                        (make-vector num-worker-threads nil)
+                        0
+                        nil
+                        nil
+                        nil
+                        nil
+                        queue-lock
+                        (make-condition-variable queue-lock)
+                        (make-condition-variable queue-lock)
+                        (make-condition-variable queue-lock))))
     (dotimes (i num-worker-threads)
       (aset (tpool-threads tpool) i (make-thread (lambda () (tpool--thread tpool)))))
     tpool))
@@ -106,9 +107,7 @@
           (cl-return))
 
         ;; allocate work structure
-        (let ((work (make-tpool-work :routine routine
-                                     :arg arg
-                                     :next nil)))
+        (let ((work (record 'tpool-work routine arg nil)))
           (printf "adder: adding an item %s\n" routine) ;
 
           (if (not (zerop cur-queue-size))
